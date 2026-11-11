@@ -9,12 +9,24 @@ public class chunker {
     public static List<String> chunk(String text, int size, int overlap){
         List<String> chunks = new ArrayList<>();
         text = text.replace("\\s+", " ").trim();
-        int step = size - overlap;
+        String[] sentences = text.split("(?<=[.!?]) ");
 
-        for(int start = 0; start < text.length(); start += step){
-            int end = Math.min(start + size, text.length());
-            chunks.add(text.substring(start, end));
-            if(end == text.length()) break;
+        StringBuilder current = new StringBuilder();
+        String lastSentence = "";
+
+        for (String s : sentences) {
+            if (current.length() > 0 && current.length() + s.length() + 1 > size) {
+                chunks.add(current.toString());
+                current = new StringBuilder(lastSentence);
+            }
+            if(current.length() > 0){
+                current.append(" ");
+            }
+            current.append(s);
+            lastSentence = s;
+        }
+        if(current.length() > 0){
+            chunks.add(current.toString());
         }
 
         return chunks;
