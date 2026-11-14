@@ -1,0 +1,1 @@
+The Smart Helpdesk is a college ticketing system. Students raise tickets for hostel, library or lab issues. Each ticket has a status: open, in progress, or resolved. Staff members can assign tickets and add comments. The backend uses Spring Boot and a MySQL database.

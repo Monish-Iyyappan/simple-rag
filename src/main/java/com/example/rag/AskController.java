@@ -16,4 +16,14 @@ public class AskController {
     public RagService.AskResponse ask(@RequestBody RagService.AskRequest request) throws Exception{
         return rag.ask(request.question());
     }
+
+    @org.springframework.web.bind.annotation.ExceptionHandler(Exception.class)
+    public org.springframework.http.ResponseEntity<String> handleError(Exception e){
+        Throwable root = e;
+        while(root.getCause() != null){
+            root = root.getCause();
+        }
+        return org.springframework.http.ResponseEntity.status(500)
+                .body(e.getClass().getSimpleName() + " / " + root.getClass().getSimpleName() + ": " + root.getMessage());
+    }
 }

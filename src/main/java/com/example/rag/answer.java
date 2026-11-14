@@ -9,12 +9,13 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 public class answer {
-    private static final String MODEL = "gemini-3.8-flash";
+    private static final String MODEL = "gemini-3.5-flash-lite";
     private static final String URL = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent";
 
     private static void main(String[] args) throws Exception{
@@ -51,7 +52,7 @@ public class answer {
         }
 
         //3.build the prompt
-        String prompt = "Anwr th qustion using ONLY th ontxt below. "
+        String prompt = "Answer the question using ONLY the context below, in at most 2 short sentences. "
                 + "If the answer is not in the context, say \"I don't know based on the documents.\"\n\n"
                 + "context:\n" + context + "\nQuestion: " + question;
 
@@ -63,10 +64,13 @@ public class answer {
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(URL))
+                .timeout(Duration.ofSeconds(30))
                 .header("Content-Type", "application/json")
                 .header("x-goog-api-key", key)
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
+
+        long t0 = System.currentTimeMillis();
         
         HttpClient http = HttpClient.newHttpClient();
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
@@ -75,6 +79,8 @@ public class answer {
             Thread.sleep(attempt*5000L);
             response = http.send(request, HttpResponse.BodyHandlers.ofString());
         }
+
+        System.out.println("Gemini took " + (System.currentTimeMillis() - t0) + " ms");
 
         if(response.statusCode() != 200){
             System.out.println("Error " + response.statusCode() + ": " + response.body());

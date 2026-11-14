@@ -8,6 +8,7 @@ import org.bson.Document;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import com.mongodb.client.model.Filters;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -23,7 +24,7 @@ public class RagService {
     public record AskRequest(String question) {}
     public record AskResponse(String answer, List<String> sources){}
 
-    private static final String MODEL = "gemini-3.8-flash";
+    private static final String MODEL = "gemini-3.5-flash-lite";
     private static final String URL = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent";
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -69,8 +70,9 @@ public class RagService {
             context.append("- ").append(d.getString("text")).append("\n");
         }
 
+        System.out.println("Search done, calling Gemini now");
         //3. build the prompt
-        String prompt = "Answer the question using ONLY the context below. "
+        String prompt = "Answer the question using ONLY the context below, in at most 3 sentences."
                 + "If the answer is not in the context, say \"I don't know based on the documents.\"\n\n"
                 + "Context:\n" + context + "\nQuestion: " + question;
 
@@ -80,7 +82,7 @@ public class RagService {
         ));
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(URL))
-                .timeout(Duration.ofSeconds(60))
+                .timeout(Duration.ofSeconds(45))
                 .header("Content-Type", "application/json")
                 .header("x-goog-api-key", geminikey)
                 .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -104,4 +106,26 @@ public class RagService {
 
         return new AskResponse(answer, sources);
     }
+
+    public int ingest(String source, String text) throws Exception{
+        List<String> pieces = chunker.chunk(text, 300, 50);
+        var chunks = client.getDatabase("rag_db").getCollection("chunks");
+
+        //remove old chunks of this file so re-uploading doesn't create duplicates
+        chunks.deleteMany(Filters.eq("source", source));
+
+        for(int i = 0; i < pieces.size(); i++){
+            List<Double> embedding = new ArrayList<>();
+            for(double v : App.embed(pieces.get(i), geminikey)){
+                embedding.add(v);
+            }
+            chunks.insertOne(new Document("text", pieces.get(i))
+                    .append("embedding", embedding)
+                    .append("source", source)
+                    .append("chunkIndex", i));
+                Thread.sleep(300);
+        }
+        return pieces.size();
+    }
+
 }
