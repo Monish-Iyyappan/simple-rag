@@ -2,3 +2,5 @@ target/
 .vscode/
 *.env
 .env
+.venv/
+__pycache/__

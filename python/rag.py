@@ -1,0 +1,112 @@
+import os,re,sys,time, requests
+from pymongo import MongoClient
+
+BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
+EMBED_MODEL = "gemini-embedding-001"
+ANSWER_MODEL = "gemini-3.5-flash-lite"
+DIMENSIONS = 768
+INDEX_NAME = "autoembed_index"
+
+KEY = os.environ.get("GEMINI_API_KEY")
+URI = os.environ.get("MONGODB_URI")
+if not KEY or not URI:
+    sys.exit("Missing GEMINI_API_KEY or MONGODB_URI. Open a new terminal and try again.")
+
+chunks = MongoClient(URI, serverSelectionTimeoutMS=8000)["rag_db"]["chunks"]
+
+def chunk(text, size=300):
+    #Split into whole txt into chunks with embed vectors
+    text = re.sub(r"\s+", " ", text).strip()
+    sentences = re.split(r"(?<=[.!?]) ", text)
+    result, current, last = [], "", ""
+    for s in sentences:
+        if current and len(current) + len(s) + 1 > size:
+            result.append(current)
+            current = last  # overlap: last sentence of the previous chunk
+        current = (current + " " + s) if current else s
+        last = s
+    if current:
+        result.append(current)
+    return result
+
+def embed(text):
+    r = requests.post(
+        BASE + EMBED_MODEL + ":embedContent",
+        headers = {"x-goog-api-key": KEY},
+        json = {
+            "content": {"parts": [{"text": text}]},
+            "outputDimensionality": DIMENSIONS,
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["embedding"]["values"]
+
+def ingest(path):
+    source = os.path.basename(path)
+    with open(path, encoding="utf-8") as f:
+        pieces = chunk(f.read())
+    chunks.delete_many({"source": source}) #re-ingesting replace old chunks
+    for i, piece in enumerate(pieces):
+        chunks.insert_one({
+            "text": piece,
+            "embedding": embed(piece),
+            "source": source,
+            "chunkIndex": i
+        })
+        time.sleep(0.3)
+        print(f"stored chunk {i + 1}/{len(pieces)}", flush=True)
+    return len(pieces)
+
+def search(question, k=3):
+    pipeline = [
+        {"$vectorSearch": {
+            "index": INDEX_NAME,
+            "path": "embedding",
+            "queryVector": embed(question),
+            "numCandidates": 50,
+            "limit": k,
+        }},
+        {"$project": {
+            "text": 1, "source": 1, "chunkIndex": 1,
+            "source": {"$meta": "vectorSearchScore"},
+        }},
+    ]
+    return list(chunks.aggregate(pipeline))
+
+def answer(question):
+    hits = search(question)
+    context = "\n".join("- " + h["text"] for h in hits)
+    prompt = (
+        "Answer the question ONLY the context below, in at most 3 sentences. "
+        "If the answer is not in the context, say \"I don't know based on the documents.\"\n\n"
+        f"Context:\n{context}\n\nQuestion: {question}"
+    )
+    for attempt in range(4):
+        r = requests.post(
+            BASE + ANSWER_MODEL + ":generateContent",
+            headers={"x-goog-api-key": KEY},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=60,
+        )
+        if r.status_code in (429, 503) and attempt < 3:
+            print(f"Gemini busy ({r.status_code}), retrying in {(attempt + 1) * 5}s...")
+            time.sleep((attempt + 1) * 5)
+            continue
+        break
+    r.raise_for_status()
+    text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    return text, hits
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 3 and sys.argv[1] == "ingest":
+        print("Stored", ingest(sys.argv[2]), "chunks")
+    elif len(sys.argv) >= 3 and sys.argv[1] == "ask":
+        text, hits = answer(" ".json(sys.argv[2:]))
+        print("\nAnswer:", text)
+        print("\nSources:")
+        for h in hits:
+            print(f"- ({h['source']:.3f}) {h['text']}")
+    else:
+        print('Usuage:\n python rag.py ingest <file.text>\n python rag.py ask "your question"')
+    
