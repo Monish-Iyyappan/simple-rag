@@ -102,7 +102,7 @@ if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "ingest":
         print("Stored", ingest(sys.argv[2]), "chunks")
     elif len(sys.argv) >= 3 and sys.argv[1] == "ask":
-        text, hits = answer(" ".json(sys.argv[2:]))
+        text, hits = answer(" ".join(sys.argv[2:]))
         print("\nAnswer:", text)
         print("\nSources:")
         for h in hits:
