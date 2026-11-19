@@ -69,13 +69,13 @@ def search(question, k=3):
         }},
         {"$project": {
             "text": 1, "source": 1, "chunkIndex": 1,
-            "source": {"$meta": "vectorSearchScore"},
+            "score": {"$meta": "vectorSearchScore"},
         }},
     ]
     return list(chunks.aggregate(pipeline))
 
-def answer(question):
-    hits = search(question)
+def answer(question, mode="hybrid"):
+    hits = hybrid_search(question) if mode == "hybrid" else search(question)
     context = "\n".join("- " + h["text"] for h in hits)
     prompt = (
         "Answer the question ONLY the context below, in at most 3 sentences. "
@@ -98,15 +98,39 @@ def answer(question):
     text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
     return text, hits
 
+def keyword_search(question, k=10):
+    pipeline = [
+        {"$search": {"index": "text_index", "text": {"query": question, "path": "text"}}},
+        {"$limit": k},
+        {"$project": {"text":1, "source":1, "chunkIndex": 1}},
+    ]
+
+    return list(chunks.aggregate(pipeline))
+
+def hybrid_search(question, k=3):
+    vector_hits = search(question, 10)
+    keyword_hits = keyword_search(question)
+    scores, docs = {}, {}
+    for results in (vector_hits, keyword_hits):
+        for rank, d in enumerate(results, start=1):
+            docs[d["_id"]] = d
+            scores[d["_id"]] = scores.get(d["_id"], 0) + 1 / (60 + rank)
+    best = sorted(scores, key=scores.get, reverse=True)[:k]
+    return [dict(docs[i], score=scores[i]) for i in best]
+
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "ingest":
         print("Stored", ingest(sys.argv[2]), "chunks")
     elif len(sys.argv) >= 3 and sys.argv[1] == "ask":
-        text, hits = answer(" ".join(sys.argv[2:]))
-        print("\nAnswer:", text)
+        args = sys.argv[2:]
+        mode = "vector" if "--vector" in args else "hybrid"
+        words = [w for w in args if w != "--vector"]
+        text, hits = answer(" ".join(words), mode)
+        print(f"\nMode: {mode}")
+        print("\nAnswer: ", text)
         print("\nSources:")
         for h in hits:
-            print(f"- ({h['source']:.3f}) {h['text']}")
+            print(f" - ({h['score']:.3f}) {h['text']}")
     else:
         print('Usuage:\n python rag.py ingest <file.text>\n python rag.py ask "your question"')
     
