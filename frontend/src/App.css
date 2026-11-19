@@ -1,0 +1,7 @@
+.app{ max-width: 720px; margin: 2rem auto; padding: 0 1rem; text-align: left; }
+.row{display: flex; gap: 0.5rem; }
+.row input { flex: 1; padding: 06rem; font-size: 1rem; }
+.row button { padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; }
+.answer { margin-top: 1.25rem; font-weight: 600; white-space: pre-wrap; }
+.source { margin-top: 0.5rem; padding:0.6rem; border-left: 3px solid #888; background: rgba(128, 128, 128, 0.12); font-size: 0.9rem; }
+.error { margin-top: 1rem; color: #c0392b}
