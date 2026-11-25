@@ -21,7 +21,7 @@ import java.util.Map;
 @Service
 public class RagService {
     
-    public record AskRequest(String question) {}
+    public record AskRequest(String question, String mode) {}
     public record AskResponse(String answer, List<String> sources){}
 
     private static final String MODEL = "gemini-3.5-flash-lite";
@@ -31,6 +31,7 @@ public class RagService {
     private final HttpClient http = HttpClient.newHttpClient();
     private final MongoClient client;
     private final String geminikey;
+    private final HybridSearch hybridSearch = new HybridSearch();
 
     public RagService(){
         this.geminikey = System.getenv("GEMINI_API_KEY");
@@ -46,37 +47,87 @@ public class RagService {
         client.close();
     }
 
-    public AskResponse ask(String question) throws Exception{
-        //1.embed the question
+        // Vector search on autoembed_index
+    public List<Document> vectorSearch(List<Double> queryVector, int limit) {
+        List<Document> pipeline = List.of(
+            new Document("$vectorSearch", new Document("index", "autoembed_index")
+                .append("path", "embedding")
+                .append("queryVector", queryVector)
+                .append("numCandidates", 50)
+                .append("limit", limit)),
+            new Document("$project", new Document("text", 1)
+                .append("source", 1)
+                .append("chunkIndex", 1))
+        );
+
+        List<Document> results = new ArrayList<>();
+        for (Document d : client.getDatabase("rag_db").getCollection("chunks").aggregate(pipeline)) {
+            results.add(d);
+        }
+        return results;
+    }
+
+    // Keyword search on Atlas Search text_index
+    public List<Document> keywordSearch(String queryText, int limit) {
+        List<Document> pipeline = List.of(
+            new Document("$search", new Document("index", "text_index")
+                .append("text", new Document("query", queryText).append("path", "text"))),
+            new Document("$limit", limit),
+            new Document("$project", new Document("text", 1)
+                .append("source", 1)
+                .append("chunkIndex", 1))
+        );
+
+        List<Document> results = new ArrayList<>();
+        for (Document d : client.getDatabase("rag_db").getCollection("chunks").aggregate(pipeline)) {
+            results.add(d);
+        }
+        return results;
+    }
+
+    // Backward-compatible ask method defaulting to vector mode
+    public AskResponse ask(String question) throws Exception {
+        return ask(question, "vector");
+    }
+
+    // Answers question using either vector search or hybrid search
+    public AskResponse ask(String question, String mode) throws Exception {
+        // 1. Embed the question
         List<Double> queryVector = new ArrayList<>();
-        for(Double v : App.embed(question, geminikey)){
+        for (double v : App.embed(question, geminikey)) {
             queryVector.add(v);
         }
 
-        //2.retrieve the top chunk.
-        List<Document> pipeline = List.of(
-            new Document("$vectorSearch", new Document("index", "autoembed_index")
-                        .append("path", "embedding")
-                        .append("queryVector", queryVector)
-                        .append("numCandidates", 50)
-                        .append("limit", 3)),
-            new Document("$project", new Document("text", 1))
-        );
+        // 2. Default to vector search if mode is null or blank
+        String searchMode = (mode != null && !mode.isBlank()) ? mode.toLowerCase() : "vector";
+
+        // 3. Search for top chunks
+        List<Document> hits;
+        if ("hybrid".equals(searchMode)) {
+            // Retrieve 10 candidates each and merge using HybridSearch
+            List<Document> vHits = vectorSearch(queryVector, 10);
+            List<Document> kHits = keywordSearch(question, 10);
+            hits = hybridSearch.merge(vHits, kHits, 3);
+        } else {
+            hits = vectorSearch(queryVector, 3);
+        }
 
         List<String> sources = new ArrayList<>();
         StringBuilder context = new StringBuilder();
-        for(Document d : client.getDatabase("rag_db").getCollection("chunks").aggregate(pipeline)){
-            sources.add(d.getString("text"));
-            context.append("- ").append(d.getString("text")).append("\n");
+        for (Document d : hits) {
+            String text = d.getString("text");
+            sources.add(text);
+            context.append("- ").append(text).append("\n");
         }
 
-        System.out.println("Search done, calling Gemini now");
-        //3. build the prompt
+        System.out.println("Search done (" + searchMode + "), calling Gemini now");
+
+        // 4. Build prompt
         String prompt = "Answer the question using ONLY the context below, in at most 3 sentences."
                 + "If the answer is not in the context, say \"I don't know based on the documents.\"\n\n"
                 + "Context:\n" + context + "\nQuestion: " + question;
 
-        //4. ask gemini (retry when busy)
+        // 5. Send prompt to Gemini with retry logic
         String body = mapper.writeValueAsString(Map.of(
                 "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt))))
         ));

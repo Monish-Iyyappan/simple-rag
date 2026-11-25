@@ -14,7 +14,7 @@ public class AskController {
 
     @PostMapping("/ask")
     public RagService.AskResponse ask(@RequestBody RagService.AskRequest request) throws Exception{
-        return rag.ask(request.question());
+        return rag.ask(request.question(), request.mode());
     }
 
     @org.springframework.web.bind.annotation.ExceptionHandler(Exception.class)
