@@ -1,14 +1,14 @@
 package com.example.rag;
 
-import jakarta.service.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 
-public class CyrrentUser {
+public class CurrentUser {
     public static final String HEADER_USER_ID = "X-User-Id";
 
-    public static String getUserId(KttpServletRequest request){
+    public static String getUserId(HttpServletRequest request){
         String userId = request.getHeader(HEADER_USER_ID);
 
-        if(UserId == null || userId.isBlank()){
+        if(userId == null || userId.isBlank()){
             throw new IllegalArgumentException("Missing required X-User-Id header");
         }
         return userId.trim();

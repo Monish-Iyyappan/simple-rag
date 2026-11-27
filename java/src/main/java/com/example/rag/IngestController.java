@@ -8,6 +8,8 @@ import org.springframework.web.multipart.MultipartFile;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 @RestController
 public class IngestController {
 
@@ -18,9 +20,10 @@ public class IngestController {
     }
 
     @PostMapping("/ingest")
-    public Map<String, Object> ingest(@RequestParam("file") MultipartFile file) throws Exception {
+    public Map<String, Object> ingest(@RequestParam("file") MultipartFile file, HttpServletRequest request) throws Exception {
+        String userId = CurrentUser.getUserId(request);
         String text = new String(file.getBytes(), StandardCharsets.UTF_8);
-        int count = rag.ingest(file.getOriginalFilename(), text);
-        return Map.of("source", file.getOriginalFilename(), "chunksStored", count);
+        int count = rag.ingest(file.getOriginalFilename(), text, userId);
+        return Map.of("source", file.getOriginalFilename(), "chunksStored", count, "userId", userId);
     }
 }

@@ -47,14 +47,22 @@ public class RagService {
         client.close();
     }
 
-        // Vector search on autoembed_index
-    public List<Document> vectorSearch(List<Double> queryVector, int limit) {
+    
+    // Deletes all chunks for a document belonging to a specific user
+    public void deleteByDocument(String docId, String userId){
+        client.getDatabase("rag_db").getCollection("chunks")
+            .deleteMany(Filters.and(Filters.eq("source", docId), Filters.eq("userId", userId)));
+    }
+    
+    // Vector search on autoembed_index
+    public List<Document> vectorSearch(List<Double> queryVector, int limit, String userId) {
         List<Document> pipeline = List.of(
             new Document("$vectorSearch", new Document("index", "autoembed_index")
                 .append("path", "embedding")
                 .append("queryVector", queryVector)
                 .append("numCandidates", 50)
-                .append("limit", limit)),
+                .append("limit", limit)
+                .append("filter", new Document("userId", userId))),
             new Document("$project", new Document("text", 1)
                 .append("source", 1)
                 .append("chunkIndex", 1))
@@ -68,10 +76,14 @@ public class RagService {
     }
 
     // Keyword search on Atlas Search text_index
-    public List<Document> keywordSearch(String queryText, int limit) {
+    public List<Document> keywordSearch(String queryText, int limit, String userId) {
         List<Document> pipeline = List.of(
             new Document("$search", new Document("index", "text_index")
-                .append("text", new Document("query", queryText).append("path", "text"))),
+                .append("compound", new Document("must", List.of(
+                    new Document("text", new Document("query", queryText).append("path", "text"))
+                )).append("filter", List.of(
+                    new Document("equals", new Document("path", "userId").append("value", userId))
+                )))),
             new Document("$limit", limit),
             new Document("$project", new Document("text", 1)
                 .append("source", 1)
@@ -86,12 +98,12 @@ public class RagService {
     }
 
     // Backward-compatible ask method defaulting to vector mode
-    public AskResponse ask(String question) throws Exception {
-        return ask(question, "vector");
+    public AskResponse ask(String question, String userId) throws Exception {
+        return ask(question, "vector", userId);
     }
 
     // Answers question using either vector search or hybrid search
-    public AskResponse ask(String question, String mode) throws Exception {
+    public AskResponse ask(String question, String mode, String userId) throws Exception {
         // 1. Embed the question
         List<Double> queryVector = new ArrayList<>();
         for (double v : App.embed(question, geminikey)) {
@@ -105,11 +117,11 @@ public class RagService {
         List<Document> hits;
         if ("hybrid".equals(searchMode)) {
             // Retrieve 10 candidates each and merge using HybridSearch
-            List<Document> vHits = vectorSearch(queryVector, 10);
-            List<Document> kHits = keywordSearch(question, 10);
+            List<Document> vHits = vectorSearch(queryVector, 10, userId);
+            List<Document> kHits = keywordSearch(question, 10, userId);
             hits = hybridSearch.merge(vHits, kHits, 3);
         } else {
-            hits = vectorSearch(queryVector, 3);
+            hits = vectorSearch(queryVector, 3, userId);
         }
 
         List<String> sources = new ArrayList<>();
@@ -158,12 +170,12 @@ public class RagService {
         return new AskResponse(answer, sources);
     }
 
-    public int ingest(String source, String text) throws Exception{
+    public int ingest(String source, String text, String userId) throws Exception{
         List<String> pieces = chunker.chunk(text, 300, 50);
         var chunks = client.getDatabase("rag_db").getCollection("chunks");
 
         //remove old chunks of this file so re-uploading doesn't create duplicates
-        chunks.deleteMany(Filters.eq("source", source));
+        deleteByDocument(source, userId);
 
         for(int i = 0; i < pieces.size(); i++){
             List<Double> embedding = new ArrayList<>();
@@ -173,7 +185,8 @@ public class RagService {
             chunks.insertOne(new Document("text", pieces.get(i))
                     .append("embedding", embedding)
                     .append("source", source)
-                    .append("chunkIndex", i));
+                    .append("chunkIndex", i)
+                    .append("userId", userId));
                 Thread.sleep(300);
         }
         return pieces.size();
