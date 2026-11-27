@@ -42,23 +42,24 @@ def embed(text):
     r.raise_for_status()
     return r.json()["embedding"]["values"]
 
-def ingest(path):
+def ingest(path, user_id):
     source = os.path.basename(path)
     with open(path, encoding="utf-8") as f:
         pieces = chunk(f.read())
-    chunks.delete_many({"source": source}) #re-ingesting replace old chunks
+    chunks.delete_many({"source": source, "userId": user_id}) #re-ingesting replace old chunks
     for i, piece in enumerate(pieces):
         chunks.insert_one({
             "text": piece,
             "embedding": embed(piece),
             "source": source,
-            "chunkIndex": i
+            "chunkIndex": i,
+            "userId": user_id,
         })
         time.sleep(0.3)
         print(f"stored chunk {i + 1}/{len(pieces)}", flush=True)
     return len(pieces)
 
-def search(question, k=3):
+def search(question, k=3, user_id=None):
     pipeline = [
         {"$vectorSearch": {
             "index": INDEX_NAME,
@@ -66,6 +67,7 @@ def search(question, k=3):
             "queryVector": embed(question),
             "numCandidates": 50,
             "limit": k,
+            "filter": {"userId": user_id},
         }},
         {"$project": {
             "text": 1, "source": 1, "chunkIndex": 1,
@@ -74,8 +76,8 @@ def search(question, k=3):
     ]
     return list(chunks.aggregate(pipeline))
 
-def answer(question, mode="hybrid"):
-    hits = hybrid_search(question) if mode == "hybrid" else search(question)
+def answer(question, mode="hybrid", user_id=None):
+    hits = hybrid_search(question, 3, user_id) if mode == "hybrid" else search(question, user_id)
     context = "\n".join("- " + h["text"] for h in hits)
     prompt = (
         "Answer the question ONLY the context below, in at most 3 sentences. "
@@ -98,18 +100,21 @@ def answer(question, mode="hybrid"):
     text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
     return text, hits
 
-def keyword_search(question, k=10):
+def keyword_search(question, k=10, user_id=None):
     pipeline = [
-        {"$search": {"index": "text_index", "text": {"query": question, "path": "text"}}},
+        {"$search": {"index": "text_index", "compound":{
+            "must": [{"text": {"query": question, "path": "text"}}],
+            "filter": [{"equals": {"path": "userId", "value": user_id}}],
+        }}},
         {"$limit": k},
         {"$project": {"text":1, "source":1, "chunkIndex": 1}},
     ]
 
     return list(chunks.aggregate(pipeline))
 
-def hybrid_search(question, k=3):
-    vector_hits = search(question, 10)
-    keyword_hits = keyword_search(question)
+def hybrid_search(question, k=3, user_id=None):
+    vector_hits = search(question, 10, user_id)
+    keyword_hits = keyword_search(question, 10, user_id)
     scores, docs = {}, {}
     for results in (vector_hits, keyword_hits):
         for rank, d in enumerate(results, start=1):
@@ -119,18 +124,22 @@ def hybrid_search(question, k=3):
     return [dict(docs[i], score=scores[i]) for i in best]
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 3 and sys.argv[1] == "ingest":
-        print("Stored", ingest(sys.argv[2]), "chunks")
-    elif len(sys.argv) >= 3 and sys.argv[1] == "ask":
-        args = sys.argv[2:]
+    if len(sys.argv) >= 4 and sys.argv[1] == "ingest":
+        file_path = sys.argv[2]
+        user = sys.argv[3]
+        print(f"Stored {ingest(file_path, user)} chunks for user '{user}'")
+    elif len(sys.argv) >= 4 and sys.argv[1] == "ask":
+        user = sys.argv[2]
+        args = sys.argv[3:]
         mode = "vector" if "--vector" in args else "hybrid"
         words = [w for w in args if w != "--vector"]
-        text, hits = answer(" ".join(words), mode)
-        print(f"\nMode: {mode}")
+        question = " ".join(words)
+        text, hits = answer(question, mode, user)
+        print(f"\nUser: {user} | Mode: {mode}")
         print("\nAnswer: ", text)
         print("\nSources:")
         for h in hits:
-            print(f" - ({h['score']:.3f}) {h['text']}")
+            print(f" - ({h.get('score',0):.3f}) {h['text']}")
     else:
-        print('Usuage:\n python rag.py ingest <file.text>\n python rag.py ask "your question"')
+        print('Usuage:\n python rag.py ingest <file.text> <user_id>\n python rag.py ask <user_id> "your question" [--vector]')
     

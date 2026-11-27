@@ -48,7 +48,6 @@ public class RagService {
     }
 
     
-    // Deletes all chunks for a document belonging to a specific user
     public void deleteByDocument(String docId, String userId){
         client.getDatabase("rag_db").getCollection("chunks")
             .deleteMany(Filters.and(Filters.eq("source", docId), Filters.eq("userId", userId)));
