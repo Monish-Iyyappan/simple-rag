@@ -34,6 +34,10 @@ public class App {
                 .build();
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        if(response.statusCode() == 400 || response.statusCode() == 401 || response.statusCode() == 403){
+            System.err.println("Error: API_KEY_REJECTED");
+            throw new com.example.rag.connection.ConnectionException("API_KEY_REJECTED", 400);
+        }
         if (response.statusCode() != 200) {
             throw new RuntimeException("Error " + response.statusCode() + ": " + response.body());
         }
